@@ -1,0 +1,55 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: jobmap-db
+    environment:
+      POSTGRES_DB: jobmap
+      POSTGRES_USER: jobmap
+      POSTGRES_PASSWORD: jobmap
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/app/db/migrations/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U jobmap" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: jobmap-backend
+    environment:
+      DATABASE_URL: postgresql://jobmap:jobmap@db:5432/jobmap
+      ADMIN_API_KEY: dev-admin-key
+      CORS_ORIGINS: http://localhost:3000
+      GEOCODER_PROVIDER: nominatim
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: jobmap-frontend
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
