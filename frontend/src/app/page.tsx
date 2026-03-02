@@ -6,6 +6,7 @@ import { fetchJobs } from "@/lib/api";
 import { JobFilters, JobListItem } from "@/lib/types";
 import FilterPanel from "@/components/FilterPanel";
 import JobDrawer from "@/components/JobDrawer";
+import JobTable from "@/components/JobTable";
 import dynamic from "next/dynamic";
 import type { GlobeHandle } from "@/components/Globe";
 
@@ -60,12 +61,15 @@ const Globe = dynamic(() => import("@/components/Globe"), {
   ),
 });
 
+type ViewMode = "globe" | "table";
+
 export default function HomePage() {
   const [filters, setFilters] = useState<JobFilters>({});
   const [selectedJob, setSelectedJob] = useState<JobListItem | null>(null);
   const [hoveredJob, setHoveredJob] = useState<JobListItem | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isFilterCollapsed, setIsFilterCollapsed] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>("globe");
   const globeRef = useRef<GlobeHandle>(null);
 
   const { data, isLoading, error } = useQuery({
@@ -101,7 +105,6 @@ export default function HomePage() {
         globeRef.current.flyTo(coords.lat, coords.lng, 1.8);
       }
     }
-    // If country is null (reset), fly back to default view
     if (!country && globeRef.current) {
       globeRef.current.flyTo(20, 0, 2.5);
     }
@@ -119,65 +122,99 @@ export default function HomePage() {
         onToggleCollapse={() => setIsFilterCollapsed(!isFilterCollapsed)}
       />
 
-      {/* Globe */}
+      {/* Main Content */}
       <div className="globe-wrapper">
-        {error ? (
-          <div className="error-state">
-            <h3>Unable to load jobs</h3>
-            <p>Check that the backend is running at {process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}</p>
-          </div>
-        ) : (
-          <Globe
-            ref={globeRef}
-            jobs={jobs}
-            onJobClick={handleJobClick}
-            onJobHover={handleJobHover}
-            selectedJobId={selectedJob?.id || null}
-          />
-        )}
-
-        {/* Hover Tooltip */}
-        {hoveredJob && (
-          <div className="globe-tooltip">
-            <div className="tooltip-title">{hoveredJob.title}</div>
-            {hoveredJob.company && (
-              <div className="tooltip-company">{hoveredJob.company.name}</div>
-            )}
-            {hoveredJob.location_text && (
-              <div className="tooltip-location">{hoveredJob.location_text}</div>
-            )}
-          </div>
-        )}
-
-        {/* Loading overlay */}
-        {isLoading && (
-          <div className="loading-overlay">
-            <div className="loading-spinner" />
-          </div>
-        )}
-
-        {/* Legend */}
-        <div className="globe-legend">
-          <div className="legend-item">
-            <span className="legend-dot onsite" />
-            On-site
-          </div>
-          <div className="legend-item">
-            <span className="legend-dot hybrid" />
-            Hybrid
-          </div>
-          <div className="legend-item">
-            <span className="legend-dot remote" />
-            Remote
-          </div>
+        {/* View Toggle */}
+        <div className="view-toggle">
+          <button
+            className={`toggle-btn ${viewMode === "globe" ? "active" : ""}`}
+            onClick={() => setViewMode("globe")}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+            </svg>
+            Globe
+          </button>
+          <button
+            className={`toggle-btn ${viewMode === "table" ? "active" : ""}`}
+            onClick={() => setViewMode("table")}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M3 9h18M3 15h18M9 3v18" />
+            </svg>
+            Table
+          </button>
         </div>
 
-        {/* No results */}
-        {!isLoading && jobs.length === 0 && (
-          <div className="no-results">
-            <h3>No jobs found</h3>
-            <p>Try adjusting your filters</p>
-          </div>
+        {viewMode === "globe" ? (
+          <>
+            {error ? (
+              <div className="error-state">
+                <h3>Unable to load jobs</h3>
+                <p>Check that the backend is running at {process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"}</p>
+              </div>
+            ) : (
+              <Globe
+                ref={globeRef}
+                jobs={jobs}
+                onJobClick={handleJobClick}
+                onJobHover={handleJobHover}
+                selectedJobId={selectedJob?.id || null}
+              />
+            )}
+
+            {/* Hover Tooltip */}
+            {hoveredJob && (
+              <div className="globe-tooltip">
+                <div className="tooltip-title">{hoveredJob.title}</div>
+                {hoveredJob.company && (
+                  <div className="tooltip-company">{hoveredJob.company.name}</div>
+                )}
+                {hoveredJob.location_text && (
+                  <div className="tooltip-location">{hoveredJob.location_text}</div>
+                )}
+              </div>
+            )}
+
+            {/* Loading overlay */}
+            {isLoading && (
+              <div className="loading-overlay">
+                <div className="loading-spinner" />
+              </div>
+            )}
+
+            {/* Legend */}
+            <div className="globe-legend">
+              <div className="legend-item">
+                <span className="legend-dot onsite" />
+                On-site
+              </div>
+              <div className="legend-item">
+                <span className="legend-dot hybrid" />
+                Hybrid
+              </div>
+              <div className="legend-item">
+                <span className="legend-dot remote" />
+                Remote
+              </div>
+            </div>
+
+            {/* No results */}
+            {!isLoading && jobs.length === 0 && (
+              <div className="no-results">
+                <h3>No jobs found</h3>
+                <p>Try adjusting your filters</p>
+              </div>
+            )}
+          </>
+        ) : (
+          <JobTable
+            jobs={jobs}
+            onJobClick={handleJobClick}
+            isLoading={isLoading}
+          />
         )}
       </div>
 
