@@ -15,20 +15,28 @@ To disable the scheduler entirely:
   SCHEDULER_ENABLED=false
 """
 import logging
+import sys
+from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
 from app.db.database import SessionLocal
 
-logger = logging.getLogger(__name__)
+# Configure logging to output to stdout (visible in Docker logs)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
+    stream=sys.stdout,
+)
+logger = logging.getLogger("scheduler")
 
 scheduler = BackgroundScheduler()
 
 
 def run_all_ingestion():
     """Run ingestion from all sources. Called by the scheduler."""
-    logger.info("⏰ Scheduled ingestion starting...")
+    print(f"[{datetime.utcnow().isoformat()}] ⏰ Scheduled ingestion starting...", flush=True)
     db = SessionLocal()
 
     sources = [
@@ -42,6 +50,7 @@ def run_all_ingestion():
 
     total_inserted = 0
     total_updated = 0
+    total_fetched = 0
 
     try:
         for name, module_path, func_name in sources:
@@ -50,28 +59,35 @@ def run_all_ingestion():
                 module = importlib.import_module(module_path)
                 ingest_fn = getattr(module, func_name)
                 run = ingest_fn(db)
-                logger.info(
+                msg = (
                     f"  ✅ {name}: fetched={run.jobs_fetched}, "
                     f"inserted={run.jobs_inserted}, updated={run.jobs_updated}"
                 )
+                print(msg, flush=True)
+                logger.info(msg)
                 total_inserted += run.jobs_inserted
                 total_updated += run.jobs_updated
+                total_fetched += run.jobs_fetched
             except Exception as e:
-                logger.error(f"  ❌ {name} failed: {e}")
+                msg = f"  ❌ {name} failed: {e}"
+                print(msg, flush=True)
+                logger.error(msg)
     finally:
         db.close()
 
-    logger.info(
+    summary = (
         f"⏰ Scheduled ingestion complete: "
-        f"inserted={total_inserted}, updated={total_updated}"
+        f"fetched={total_fetched}, inserted={total_inserted}, updated={total_updated}"
     )
+    print(f"[{datetime.utcnow().isoformat()}] {summary}", flush=True)
+    logger.info(summary)
 
 
 def start_scheduler():
     """Start the background scheduler if enabled."""
     enabled = getattr(settings, "scheduler_enabled", True)
     if not enabled:
-        logger.info("Scheduler is disabled (SCHEDULER_ENABLED=false)")
+        print("📅 Scheduler is DISABLED (SCHEDULER_ENABLED=false)", flush=True)
         return
 
     hour = getattr(settings, "scheduler_hour", 6)
@@ -85,11 +101,12 @@ def start_scheduler():
     )
 
     scheduler.start()
-    logger.info(f"📅 Scheduler started: daily ingestion at {hour:02d}:00 UTC")
+    print(f"📅 Scheduler started: daily ingestion at {hour:02d}:00 UTC", flush=True)
+    print(f"📅 Next run: {scheduler.get_job('daily_ingestion').next_run_time}", flush=True)
 
 
 def stop_scheduler():
     """Shut down the scheduler gracefully."""
     if scheduler.running:
         scheduler.shutdown(wait=False)
-        logger.info("Scheduler stopped")
+        print("📅 Scheduler stopped", flush=True)
