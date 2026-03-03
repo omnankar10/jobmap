@@ -2,6 +2,8 @@
 
 > **A 3D globe-based job browser** that aggregates listings from 6 free job APIs and visualizes them on an interactive WebGL globe. Filter by country, company, work type, recency, and skills — then click any point to see the full listing.
 
+🔗 **Live App**: [jobmap-steel.vercel.app](https://jobmap-steel.vercel.app)
+
 ---
 
 ## Table of Contents
@@ -25,13 +27,15 @@
 JobMap solves the problem of fragmented job boards by **aggregating jobs from multiple sources** and displaying them on a 3D globe. Users can:
 
 - 🌍 Explore jobs on an interactive 3D globe
-- 🔍 Search by job title, company name, or keywords
+- � Toggle between **globe view** and **table view**
+- �🔍 Search by job title, company name, or keywords
 - 📍 Filter by country (globe auto-navigates to it)
 - 🏛️ Filter by company
 - 💼 Filter by work type (remote / hybrid / on-site)
 - 🕐 Filter by recency (24h, 7d, 30d)
 - 🏷️ Filter by technology tags
-- 📄 View full HTML job descriptions and apply directly
+- �️ Mapbox geocoding with caching layer
+- �📄 View full HTML job descriptions and apply directly
 
 ---
 
@@ -39,15 +43,16 @@ JobMap solves the problem of fragmented job boards by **aggregating jobs from mu
 
 ```mermaid
 graph TB
-    subgraph "Frontend - Next.js"
+    subgraph "Frontend - Next.js (Vercel)"
         A["page.tsx - Main App"]
         B["Globe.tsx - 3D WebGL Globe"]
+        B2["JobTable.tsx - Table View"]
         C["FilterPanel.tsx - Sidebar Filters"]
         D["JobDrawer.tsx - Job Detail Drawer"]
         E["Tooltip.tsx - Hover Tooltip"]
     end
 
-    subgraph "Backend - FastAPI"
+    subgraph "Backend - FastAPI (Railway)"
         F["main.py - App Entry + Scheduler"]
         G["jobs.py Router"]
         H["admin.py Router"]
@@ -65,11 +70,12 @@ graph TB
 
     subgraph "Services"
         P["geocoder.py"]
+        P2["backfill_geo_mapbox.py"]
         Q["location_parser.py"]
     end
 
-    subgraph "Database"
-        R["PostgreSQL + PostGIS"]
+    subgraph "Database (Railway)"
+        R["PostgreSQL 15 + PostGIS"]
     end
 
     subgraph "External APIs"
@@ -80,9 +86,11 @@ graph TB
         W["Jobicy"]
         X["Ashby"]
         Y["Nominatim Geocoder"]
+        Y2["Mapbox Geocoding API"]
     end
 
     A --> B
+    A --> B2
     A --> C
     A --> D
     A --> E
@@ -104,8 +112,9 @@ graph TB
 
     J & K & L & M & N & O --> P
     P --> Y
+    P2 --> Y2
     P --> Q
-    P --> R
+    P & P2 --> R
 ```
 
 ---
@@ -154,14 +163,14 @@ sequenceDiagram
 ### Tech Stack
 | Layer | Technology |
 |-------|-----------|
-| Framework | **FastAPI** (Python 3.11) |
+| Framework | **FastAPI** (Python 3.12) |
 | ORM | **SQLAlchemy 2.0** + GeoAlchemy2 |
-| Database | **PostgreSQL 15** + PostGIS |
-| Migrations | Alembic |
-| HTTP Client | httpx |
-| Geocoding | geopy (Nominatim) |
+| Database | **PostgreSQL 15** + PostGIS (Railway) |
+| HTTP Client | httpx, requests |
+| Geocoding | Nominatim (live ingestion) + **Mapbox** (backfill) |
 | Scheduler | APScheduler |
 | Server | Uvicorn |
+| Deployment | **Railway** |
 
 ### API Endpoints
 
@@ -192,10 +201,16 @@ sequenceDiagram
 - API key authentication via `X-API-Key` header
 - Supports all 6 sources individually or `source=all`
 
-#### `services/geocoder.py` — Geocoding Service
-- Uses Nominatim (free, no API key) to convert location strings to lat/lng
+#### `services/geocoder.py` — Geocoding Service (Nominatim)
+- Used during live ingestion to convert location strings to lat/lng
 - Caches geocoding results in the `geocache` table to avoid rate limits
 - Falls back gracefully when geocoding fails
+
+#### `scripts/backfill_geo_mapbox.py` — Mapbox Geocoding Backfill
+- Batch geocodes jobs with missing geo data using **Mapbox API**
+- Caches results in `geocode_cache` table (avoids duplicate API calls)
+- Updates jobs table with lat/lng, city, region, country
+- Run manually: `python3 backend/scripts/backfill_geo_mapbox.py`
 
 #### `services/location_parser.py` — Location Parser
 - Extracts remote type (remote/hybrid/onsite) from location strings
@@ -214,14 +229,16 @@ sequenceDiagram
 | State | React Query (`@tanstack/react-query`) |
 | Styling | **Vanilla CSS** (dark theme, glassmorphism) |
 | Fonts | Inter (Google Fonts) |
+| Deployment | **Vercel** |
 
 ### Components
 
 #### `page.tsx` — Main App Page
-- Manages all state: filters, selected job, hovered job, drawer visibility
+- Manages all state: filters, selected job, hovered job, drawer visibility, **view mode** (globe/table)
 - Holds a `ref` to the Globe for programmatic `flyTo()` navigation
 - Contains a built-in **35-country coordinate lookup** for globe navigation
-- Wires FilterPanel → API → Globe → JobDrawer
+- **Globe/Table toggle** — switches between 3D globe and tabular list view
+- Wires FilterPanel → API → Globe/Table → JobDrawer
 
 #### `Globe.tsx` — 3D WebGL Globe
 - Renders Earth with blue marble texture, bump map, and atmosphere
@@ -244,6 +261,12 @@ sequenceDiagram
 - Sanitizes HTML descriptions (strips scripts, event handlers, inline styles)
 - Falls back: `description_html` → detects HTML in `description_text` → plain text
 - Displays salary, badges, tags, post date, and a prominent "Apply Now" button
+
+#### `JobTable.tsx` — Table View
+- Full table with columns: Title, Company, Country, Type, Posted, Tags, Apply
+- Click any row to open the job detail drawer
+- Sticky header, hover highlights, type-colored badges
+- Respects all active filters (country, company, tags, etc.)
 
 #### `Tooltip.tsx` — Globe Hover Tooltip
 - Shows job title, company, and location on point hover
@@ -287,7 +310,7 @@ Each connector:
 3. Tags jobs using keyword matching against 25+ tech terms
 4. Creates company records if they don't exist
 5. Upserts jobs (insert new, update existing by `source + source_job_id`)
-6. Geocodes location text → lat/lng via Nominatim
+6. Geocodes location text → lat/lng via Nominatim (live) or Mapbox (backfill)
 7. Logs results to `ingestion_runs` table
 
 ---
@@ -402,8 +425,10 @@ jobmap/
 ├── DOCS.md                     # This file
 │
 ├── backend/
-│   ├── Dockerfile
+│   ├── Dockerfile              # Production: dynamic PORT via env
 │   ├── requirements.txt        # Python dependencies
+│   ├── scripts/
+│   │   └── backfill_geo_mapbox.py  # Mapbox geocoding backfill
 │   └── app/
 │       ├── main.py             # FastAPI app + lifespan hooks
 │       ├── config.py           # Pydantic settings from .env
@@ -438,11 +463,12 @@ jobmap/
     └── src/
         ├── app/
         │   ├── layout.tsx      # Root layout (Inter font, React Query)
-        │   ├── page.tsx        # Main app (globe + filters + drawer)
+        │   ├── page.tsx        # Main app (globe/table + filters + drawer)
         │   ├── globals.css     # Full dark theme CSS
         │   └── job/[id]/page.tsx  # SSR job detail (SEO + OG tags)
         ├── components/
         │   ├── Globe.tsx       # 3D globe (globe.gl + forwardRef)
+        │   ├── JobTable.tsx    # Table view with sortable columns
         │   ├── FilterPanel.tsx # Sidebar filters + country navigation
         │   ├── JobDrawer.tsx   # Job detail slide-in drawer
         │   └── Tooltip.tsx     # Hover tooltip
@@ -456,6 +482,15 @@ jobmap/
 
 ## Deployment
 
+### Production Stack
+
+| Service | Platform | Status |
+|---------|----------|--------|
+| **Frontend** | Vercel | ✅ [jobmap-steel.vercel.app](https://jobmap-steel.vercel.app) |
+| **Backend** | Railway | ✅ FastAPI + APScheduler |
+| **Database** | Railway | ✅ PostgreSQL 15 + PostGIS |
+| **DB Admin** | DBeaver | For direct SQL queries and monitoring |
+
 ### Local Development (Docker)
 ```bash
 cp .env.example .env
@@ -465,21 +500,45 @@ docker compose up --build
 # Ingest:   curl -X POST "http://localhost:8000/api/admin/ingest?source=all" -H "X-API-Key: dev-admin-key"
 ```
 
-### Vercel (Frontend)
-1. Push to GitHub
-2. Import repo in Vercel
-3. Set **Root Directory** to `frontend`
-4. Set **Framework Preset** to Next.js
-5. Add environment variable: `NEXT_PUBLIC_API_BASE_URL` = your backend URL
-6. Deploy
+### Vercel Setup (Frontend)
+1. Import GitHub repo in Vercel
+2. Set **Root Directory** to `frontend`
+3. Framework auto-detects **Next.js**
+4. Add environment variable: `NEXT_PUBLIC_API_BASE_URL` = Railway backend URL
+5. Deploy
 
-### Backend (Railway / Render / Fly.io)
-The backend + PostgreSQL needs a server runtime. Options:
-- **Railway**: Add PostgreSQL add-on, deploy backend from `backend/` directory
-- **Render**: Create a Web Service + PostgreSQL database
-- **Fly.io**: Deploy with `fly launch` from `backend/`
+### Railway Setup (Backend + DB)
+1. Create new project from GitHub repo
+2. Set **Root Directory** to `backend`
+3. Railway auto-detects the Dockerfile
+4. Add **PostgreSQL** addon → enable PostGIS extension
+5. Set environment variables: `DATABASE_URL` (auto from addon), `ADMIN_API_KEY`, `CORS_ORIGINS`, `SCHEDULER_HOUR`
+6. The `PORT` env var is injected automatically by Railway
 
-Set `DATABASE_URL`, `ADMIN_API_KEY`, `CORS_ORIGINS` in the deployment environment.
+### Geocoding Backfill (Mapbox)
+For jobs with missing geo data after ingestion:
+```bash
+export DATABASE_URL="postgresql://..."   # Railway DB URL
+export MAPBOX_TOKEN="pk...."
+python3 backend/scripts/backfill_geo_mapbox.py
+```
+
+### Useful SQL Queries (DBeaver)
+```sql
+-- Check ingestion history
+SELECT source, status, jobs_fetched, jobs_inserted, jobs_updated, started_at
+FROM ingestion_runs ORDER BY started_at DESC LIMIT 20;
+
+-- Geo coverage
+SELECT COUNT(*) AS total, COUNT(geo) AS with_geo,
+       COUNT(*) - COUNT(geo) AS missing_geo
+FROM jobs WHERE is_active = true;
+
+-- Jobs by country
+SELECT country, COUNT(*) AS jobs FROM jobs
+WHERE is_active = true AND country IS NOT NULL
+GROUP BY country ORDER BY jobs DESC;
+```
 
 ---
 
@@ -490,7 +549,9 @@ Set `DATABASE_URL`, `ADMIN_API_KEY`, `CORS_ORIGINS` in the deployment environmen
 | `DATABASE_URL` | `postgresql://jobmap:jobmap@localhost:5432/jobmap` | PostgreSQL connection string |
 | `ADMIN_API_KEY` | `dev-admin-key` | API key for admin/ingest endpoints |
 | `CORS_ORIGINS` | `http://localhost:3000` | Allowed CORS origins (comma-separated) |
-| `GEOCODER_PROVIDER` | `nominatim` | Geocoding provider |
+| `GEOCODER_PROVIDER` | `nominatim` | Geocoding provider for live ingestion |
+| `MAPBOX_TOKEN` | — | Mapbox API token (for backfill script) |
 | `SCHEDULER_ENABLED` | `true` | Enable/disable daily scheduler |
 | `SCHEDULER_HOUR` | `6` | UTC hour for daily ingestion (0–23) |
+| `PORT` | `8000` | Backend port (auto-set by Railway) |
 | `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:8000` | Backend URL for frontend |
